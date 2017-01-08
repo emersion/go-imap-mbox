@@ -1,11 +1,14 @@
 package mbox
 
 import (
+	"bytes"
+	"io"
 	"io/ioutil"
 	"strconv"
 	"strings"
 
 	"github.com/emersion/go-imap"
+	"github.com/emersion/go-imap/backend/backendutil"
 	"github.com/emersion/go-message"
 	"github.com/emersion/go-message/mail"
 )
@@ -33,32 +36,45 @@ func getFlags(h message.Header) []string {
 	return flags
 }
 
+func setFlags(h message.Header, flags []string) {
+	status := ""
+	for _, flag := range flags {
+		for s, f := range statuses {
+			if f == flag {
+				status += string(s)
+				break
+			}
+		}
+	}
+
+	h.Set("X-Status", status)
+}
+
 func getMessage(e *message.Entity, msg *imap.Message, items []string) error {
 	b, err := ioutil.ReadAll(e.Body)
 	if err != nil {
 		return err
 	}
 
+	br := bytes.NewReader(b)
+	e.Body = br
+
 	h := mail.Header{e.Header}
 
 	for _, item := range items {
 		switch item {
 		case imap.BodyMsgAttr, imap.BodyStructureMsgAttr:
-			// TODO
+			extended := item == imap.BodyStructureMsgAttr
+			msg.BodyStructure, _ = backendutil.FetchBodyStructure(e, extended)
+			br.Seek(0, io.SeekStart)
 		case imap.EnvelopeMsgAttr:
-			e := &imap.Envelope{
-				InReplyTo: h.Get("In-Reply-To"),
-				MessageId: h.Get("Message-Id"),
-				// TODO
-			}
-			e.Date, _ = h.Date()
-			msg.Envelope = e
+			msg.Envelope, _ = backendutil.FetchEnvelope(e.Header)
 		case imap.FlagsMsgAttr:
 			msg.Flags = getFlags(e.Header)
 		case imap.InternalDateMsgAttr:
 			msg.InternalDate, _ = h.Date()
 		case imap.SizeMsgAttr:
-			msg.Size = uint32(len(b)) // TODO: add headers
+			msg.Size = uint32(len(b)) // TODO: add headers size
 		case imap.UidMsgAttr:
 			// Nothing to do here
 		default:
@@ -67,8 +83,8 @@ func getMessage(e *message.Entity, msg *imap.Message, items []string) error {
 				break
 			}
 
-			// TODO
-			_ = section
+			msg.Body[section], _ = backendutil.FetchBodySection(e, section)
+			br.Seek(0, io.SeekStart)
 		}
 	}
 

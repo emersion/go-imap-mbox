@@ -2,11 +2,13 @@ package mbox
 
 import (
 	"io"
+	"net/mail"
 	"os"
 	"time"
 
 	"github.com/blabber/mbox"
 	"github.com/emersion/go-imap"
+	"github.com/emersion/go-imap/backend/backendutil"
 	"github.com/emersion/go-message"
 )
 
@@ -109,19 +111,74 @@ func (m *mailbox) ListMessages(isUID bool, seqset *imap.SeqSet, items []string, 
 	return s.Err()
 }
 
-func (m *mailbox) SearchMessages(uid bool, criteria *imap.SearchCriteria) ([]uint32, error) {
-	return nil, nil // TODO
+func (m *mailbox) SearchMessages(isUID bool, criteria *imap.SearchCriteria) ([]uint32, error) {
+	s, err := m.scanner()
+	if err != nil {
+		return nil, err
+	}
+
+	var matches []uint32
+	var seqnum uint32
+	for s.Next() {
+		msg := s.Message()
+		seqnum++
+
+		h := message.Header(msg.Header)
+		uid, err := getUID(h)
+		if err != nil {
+			continue
+		}
+
+		if !backendutil.MatchSeqNumAndUid(seqnum, uid, criteria) {
+			continue
+		}
+		if flags := getFlags(h); !backendutil.MatchFlags(flags, criteria) {
+			continue
+		}
+
+		e := message.NewEntity(h, msg.Body)
+		if ok, err := backendutil.Match(e, criteria); err != nil || !ok {
+			continue
+		}
+
+		if isUID {
+			matches = append(matches, uid)
+		} else {
+			matches = append(matches, seqnum)
+		}
+	}
+
+	return matches, s.Err()
 }
 
 func (m *mailbox) CreateMessage(flags []string, date time.Time, body imap.Literal) error {
+	if _, err := m.f.Seek(0, io.SeekEnd); err != nil {
+		return err
+	}
+
+	e, err := message.Read(body)
+	if err != nil {
+		return err
+	}
+
+	setFlags(e.Header, flags)
+	// TODO: write date to a header field too
+
+	msg := &mail.Message{
+		Header: mail.Header(e.Header),
+		Body: e.Body,
+	}
+
+	w := mbox.NewWriter(m.f)
+	_, err = w.WriteMessage(msg)
+	return err
+}
+
+func (m *mailbox) UpdateMessagesFlags(isUID bool, seqset *imap.SeqSet, operation imap.FlagsOp, flags []string) error {
 	return nil // TODO
 }
 
-func (m *mailbox) UpdateMessagesFlags(uid bool, seqset *imap.SeqSet, operation imap.FlagsOp, flags []string) error {
-	return nil // TODO
-}
-
-func (m *mailbox) CopyMessages(uid bool, seqset *imap.SeqSet, dest string) error {
+func (m *mailbox) CopyMessages(isUID bool, seqset *imap.SeqSet, dest string) error {
 	return nil // TODO
 }
 
